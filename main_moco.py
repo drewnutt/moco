@@ -9,6 +9,8 @@ import shutil
 import time
 import warnings
 
+import molgrid
+
 import torch
 import torch.nn as nn
 import torch.nn.parallel
@@ -18,25 +20,27 @@ import torch.optim
 import torch.multiprocessing as mp
 import torch.utils.data
 import torch.utils.data.distributed
-import torchvision.transforms as transforms
-import torchvision.datasets as datasets
-import torchvision.models as models
+# import torchvision.transforms as transforms
+# import torchvision.datasets as datasets
+# import torchvision.models as models
+# should look into getting some sort of ResNet working with this
 
 import moco.loader
 import moco.builder
 
-model_names = sorted(name for name in models.__dict__
-    if name.islower() and not name.startswith("__")
-    and callable(models.__dict__[name]))
+# model_names = sorted(name for name in models.__dict__
+#     if name.islower() and not name.startswith("__")
+#     and callable(models.__dict__[name]))
 
-parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
-parser.add_argument('data', metavar='DIR',
-                    help='path to dataset')
-parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet50',
-                    choices=model_names,
-                    help='model architecture: ' +
-                        ' | '.join(model_names) +
-                        ' (default: resnet50)')
+parser = argparse.ArgumentParser(description='PyTorch Molgrid Training')
+parser.add_argument('data', metavar='TYPES',
+                    help='path to types file')
+parser.add_argument('--ligmolcache', metavar='LIGCACHE',
+                    help='path to ligmolcache')
+parser.add_argument('--recmolcache', metavar='RECCACHE',
+                    help='path to recmolcache')
+parser.add_argument('-a', '--arch', metavar='ARCH', default='default2018',
+                    help='model architecture (default: default2018)')
 parser.add_argument('-j', '--workers', default=32, type=int, metavar='N',
                     help='number of data loading workers (default: 32)')
 parser.add_argument('--epochs', default=200, type=int, metavar='N',
@@ -65,7 +69,7 @@ parser.add_argument('--world-size', default=-1, type=int,
                     help='number of nodes for distributed training')
 parser.add_argument('--rank', default=-1, type=int,
                     help='node rank for distributed training')
-parser.add_argument('--dist-url', default='tcp://224.66.41.62:23456', type=str,
+parser.add_argument('--dist-url', default='env://', type=str,
                     help='url used to set up distributed training')
 parser.add_argument('--dist-backend', default='nccl', type=str,
                     help='distributed backend')
@@ -73,7 +77,7 @@ parser.add_argument('--seed', default=None, type=int,
                     help='seed for initializing training. ')
 parser.add_argument('--gpu', default=None, type=int,
                     help='GPU id to use.')
-parser.add_argument('--multiprocessing-distributed', action='store_true',
+parser.add_argument('--multiprocessing-distributed',default=False, action='store_false',
                     help='Use multi-processing distributed training to launch '
                          'N processes per node, which has N GPUs. This is the '
                          'fastest way to use PyTorch for either single node or '
@@ -157,7 +161,7 @@ def main_worker(gpu, ngpus_per_node, args):
     # create model
     print("=> creating model '{}'".format(args.arch))
     model = moco.builder.MoCo(
-        models.__dict__[args.arch],
+        args.arch,
         args.moco_dim, args.moco_k, args.moco_m, args.moco_t, args.mlp)
     print(model)
 
@@ -217,36 +221,39 @@ def main_worker(gpu, ngpus_per_node, args):
     cudnn.benchmark = True
 
     # Data loading code
-    traindir = os.path.join(args.data, 'train')
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
-    if args.aug_plus:
-        # MoCo v2's aug: similar to SimCLR https://arxiv.org/abs/2002.05709
-        augmentation = [
-            transforms.RandomResizedCrop(224, scale=(0.2, 1.)),
-            transforms.RandomApply([
-                transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)  # not strengthened
-            ], p=0.8),
-            transforms.RandomGrayscale(p=0.2),
-            transforms.RandomApply([moco.loader.GaussianBlur([.1, 2.])], p=0.5),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            normalize
-        ]
-    else:
-        # MoCo v1's aug: the same as InstDisc https://arxiv.org/abs/1805.01978
-        augmentation = [
-            transforms.RandomResizedCrop(224, scale=(0.2, 1.)),
-            transforms.RandomGrayscale(p=0.2),
-            transforms.ColorJitter(0.4, 0.4, 0.4, 0.4),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            normalize
-        ]
+    # traindir = os.path.join(args.data, 'train')
+    # normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+    #                                  std=[0.229, 0.224, 0.225])
+    
+    # if args.aug_plus:
+    #     # MoCo v2's aug: similar to SimCLR https://arxiv.org/abs/2002.05709
+    #     augmentation = [
+    #         transforms.RandomResizedCrop(224, scale=(0.2, 1.)),
+    #         transforms.RandomApply([
+    #             transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)  # not strengthened
+    #         ], p=0.8),
+    #         transforms.RandomGrayscale(p=0.2),
+    #         transforms.RandomApply([moco.loader.GaussianBlur([.1, 2.])], p=0.5),
+    #         transforms.RandomHorizontalFlip(),
+    #         transforms.ToTensor(),
+    #         normalize
+    #     ]
+    # else:
+    #     # MoCo v1's aug: the same as InstDisc https://arxiv.org/abs/1805.01978
+    #     augmentation = [
+    #         transforms.RandomResizedCrop(224, scale=(0.2, 1.)),
+    #         transforms.RandomGrayscale(p=0.2),
+    #         transforms.ColorJitter(0.4, 0.4, 0.4, 0.4),
+    #         transforms.RandomHorizontalFlip(),
+    #         transforms.ToTensor(),
+    #         normalize
+    #     ]
 
-    train_dataset = datasets.ImageFolder(
-        traindir,
-        moco.loader.TwoCropsTransform(transforms.Compose(augmentation)))
+    train_dataset = molgrid.MolDataset(
+        args.traindir,
+        ligmolcache=args.ligmolcache,recmolcache=args.recmolcache,
+        )
+        # need to look into transforming the data within the DataSet
 
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
