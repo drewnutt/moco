@@ -249,11 +249,10 @@ def main_worker(gpu, ngpus_per_node, args):
     #         normalize
     #     ]
 
-    train_dataset = molgrid.MolDataset(
+    train_dataset = moco.loader.TwoMolDataset(
         args.traindir,
-        ligmolcache=args.ligmolcache,recmolcache=args.recmolcache,
-        )
-        # need to look into transforming the data within the DataSet
+        ligmolcache=args.ligmolcache, recmolcache=args.recmolcache,
+        random_translation=2, random_rotation=False)
 
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)

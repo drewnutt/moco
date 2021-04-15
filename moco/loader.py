@@ -1,7 +1,19 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 from PIL import ImageFilter
 import random
+import molgrid
 
+class TwoMolDataset(torch.utils.data.Dataset):
+    def __init__(self,*args,**kwargs):
+        self.moldataset = molgrid.MolDataset(*args,**kwargs)
+
+    def __len__(self):
+        return len(self.moldataset)
+    
+    def __getitem__(self,idx):
+        q, labels = self.moldataset[idx]
+        k, labels = self.moldataset[idx]
+        return [q,k], labels
 
 class TwoCropsTransform:
     """Take two random crops of one image as the query and key."""
