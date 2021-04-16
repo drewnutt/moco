@@ -26,11 +26,9 @@ import torch.utils.data.distributed
 # should look into getting some sort of ResNet working with this
 
 import moco.loader
-import moco.builder
+import moco.builder_single
 
-# model_names = sorted(name for name in models.__dict__
-#     if name.islower() and not name.startswith("__")
-#     and callable(models.__dict__[name]))
+import wandb
 
 parser = argparse.ArgumentParser(description='PyTorch Molgrid Training')
 parser.add_argument('data', metavar='TYPES',
@@ -49,9 +47,9 @@ parser.add_argument('--epochs', default=200, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
-parser.add_argument('-b', '--batch-size', default=256, type=int,
+parser.add_argument('-b', '--batch-size', default=64, type=int,
                     metavar='N',
-                    help='mini-batch size (default: 256), this is the total '
+                    help='mini-batch size (default: 64), this is the total '
                          'batch size of all GPUs on the current node when '
                          'using Data Parallel or Distributed Data Parallel')
 parser.add_argument('--lr', '--learning-rate', default=0.03, type=float,
@@ -88,8 +86,8 @@ parser.add_argument('--multiprocessing-distributed',default=True, action='store_
 # moco specific configs:
 parser.add_argument('--moco-dim', default=1024, type=int,
                     help='feature dimension (default: 1024)')
-parser.add_argument('--moco-k', default=65536, type=int,
-                    help='queue size; number of negative keys (default: 65536)')
+parser.add_argument('--moco-k', default=32768, type=int,
+                    help='queue size; number of negative keys (default: 32768)')
 parser.add_argument('--moco-m', default=0.999, type=float,
                     help='moco momentum of updating key encoder (default: 0.999)')
 parser.add_argument('--moco-t', default=0.07, type=float,
@@ -125,6 +123,8 @@ def main():
 
 
 def main_worker(gpu, args):
+    tgs = ['MoCo_SingleGPU']
+    wandb.init(entity='andmcnutt', project='DDG_model_Regression',config=args, tags=tgs)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     args.gpu = device
 
@@ -133,7 +133,7 @@ def main_worker(gpu, args):
 
     # create model
     print("=> creating model '{}'".format(args.arch))
-    model = moco.builder.MoCo(
+    model = moco.builder_single.MoCo(
         args.arch,
         args.moco_dim, args.moco_k, args.moco_m, args.moco_t, args.mlp)
     print(model)
@@ -180,37 +180,37 @@ def main_worker(gpu, args):
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, sampler=train_sampler, drop_last=True)
 
+    wandb.watch(model, log='all')
     for epoch in range(args.start_epoch, args.epochs):
         adjust_learning_rate(optimizer, epoch, args)
 
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch, args)
 
-        if not args.multiprocessing_distributed or (args.multiprocessing_distributed
-                and args.rank % ngpus_per_node == 0):
-            save_checkpoint({
-                'epoch': epoch + 1,
-                'arch': args.arch,
-                'state_dict': model.state_dict(),
-                'optimizer' : optimizer.state_dict(),
-            }, is_best=False, filename='checkpoint_{:04d}.pth.tar'.format(epoch))
+        save_checkpoint({
+            'epoch': epoch + 1,
+            'arch': args.arch,
+            'state_dict': model.state_dict(),
+            'optimizer' : optimizer.state_dict(),
+        }, is_best=False, filename='checkpoint_{:04d}.pth.tar'.format(epoch))
 
 
 def train(train_loader, model, criterion, optimizer, epoch, args):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
-    top1 = AverageMeter('Acc@1', ':6.2f')
-    top5 = AverageMeter('Acc@5', ':6.2f')
+    # top1 = AverageMeter('Acc@1', ':6.2f')
+    # top5 = AverageMeter('Acc@5', ':6.2f')
     progress = ProgressMeter(
         len(train_loader),
-        [batch_time, data_time, losses, top1, top5],
+        [batch_time, data_time, losses],
         prefix="Epoch: [{}]".format(epoch))
 
     # switch to train mode
     model.train()
 
     end = time.time()
+    total_loss = 0
     for i, (images, _) in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
@@ -222,13 +222,14 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         # compute output
         output, target = model(im_q=images[0], im_k=images[1])
         loss = criterion(output, target)
+        total_loss += loss
 
         # acc1/acc5 are (K+1)-way contrast classifier accuracy
         # measure accuracy and record loss
-        acc1, acc5 = accuracy(output, target, topk=(1, 5))
+        # acc1, acc5 = accuracy(output, target, topk=(1, 5))
         losses.update(loss.item(), images[0].size(0))
-        top1.update(acc1[0], images[0].size(0))
-        top5.update(acc5[0], images[0].size(0))
+        # top1.update(acc1[0], images[0].size(0))
+        # top5.update(acc5[0], images[0].size(0))
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
@@ -241,6 +242,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
 
         if i % args.print_freq == 0:
             progress.display(i)
+    wandb.log({"Total Loss": total_loss/((i+1)*args.batch_size)})
 
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
