@@ -36,9 +36,9 @@ parser = argparse.ArgumentParser(description='PyTorch Molgrid Training')
 parser.add_argument('data', metavar='TYPES',
                     help='path to types file')
 parser.add_argument('--ligmolcache', metavar='LIGCACHE',
-                    help='path to ligmolcache')
+                    required=True, help='path to ligmolcache')
 parser.add_argument('--recmolcache', metavar='RECCACHE',
-                    help='path to recmolcache')
+                    required=True, help='path to recmolcache')
 parser.add_argument('-a', '--arch', metavar='ARCH', default='default2018',
                     help='model architecture (default: default2018)')
 parser.add_argument('-j', '--workers', default=32, type=int, metavar='N',
