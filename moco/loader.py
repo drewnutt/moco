@@ -15,7 +15,7 @@ class TwoMolDataset(torch.utils.data.Dataset):
         q, labels1 = self.moldataset[idx]
         k, labels2 = self.moldataset[idx]
         assert labels1 == labels2, f"Somehow the data has different labels"
-        return [q, k], labels
+        return [q, k], labels1
 
 class TwoCropsTransform:
     """Take two random crops of one image as the query and key."""

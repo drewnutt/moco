@@ -40,10 +40,10 @@ parser.add_argument('--ligmolcache', metavar='LIGCACHE',
 parser.add_argument('--recmolcache', metavar='RECCACHE',
                     required=True, help='path to recmolcache')
 parser.add_argument('--dataroot', metavar='DATAROOT',
-                    required=True, help='path to dataroot')
+                    required=False, help='path to dataroot')
 parser.add_argument('-a', '--arch', metavar='ARCH', default='default2018',
                     help='model architecture (default: default2018)')
-parser.add_argument('-j', '--workers', default=32, type=int, metavar='N',
+parser.add_argument('-j', '--workers', default=1, type=int, metavar='N',
                     help='number of data loading workers (default: 32)')
 parser.add_argument('--epochs', default=200, type=int, metavar='N',
                     help='number of total epochs to run')
@@ -178,7 +178,7 @@ def main_worker(gpu, args):
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
-        num_workers=args.workers, pin_memory=True, sampler=train_sampler, drop_last=True)
+        num_workers=args.workers, sampler=train_sampler, drop_last=True)
 
     for epoch in range(args.start_epoch, args.epochs):
         adjust_learning_rate(optimizer, epoch, args)
