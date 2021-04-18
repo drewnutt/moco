@@ -65,23 +65,6 @@ parser.add_argument('-p', '--print-freq', default=10, type=int,
                     metavar='N', help='print frequency (default: 10)')
 parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
-parser.add_argument('--world-size', default=-1, type=int,
-                    help='number of nodes for distributed training')
-parser.add_argument('--rank', default=-1, type=int,
-                    help='node rank for distributed training')
-parser.add_argument('--dist-url', default='env://', type=str,
-                    help='url used to set up distributed training')
-parser.add_argument('--dist-backend', default='nccl', type=str,
-                    help='distributed backend')
-parser.add_argument('--seed', default=None, type=int,
-                    help='seed for initializing training. ')
-parser.add_argument('--gpu', default=None, type=int,
-                    help='GPU id to use.')
-parser.add_argument('--multiprocessing-distributed',default=True, action='store_false',
-                    help='Use multi-processing distributed training to launch '
-                         'N processes per node, which has N GPUs. This is the '
-                         'fastest way to use PyTorch for either single node or '
-                         'multi node data parallel training')
 
 # moco specific configs:
 parser.add_argument('--moco-dim', default=1024, type=int,
@@ -94,35 +77,15 @@ parser.add_argument('--moco-t', default=0.07, type=float,
                     help='softmax temperature (default: 0.07)')
 
 # options for moco v2
-parser.add_argument('--mlp', action='store_true',
+parser.add_argument('--mlp',default=True, action='store_false',
                     help='use mlp head')
-parser.add_argument('--aug-plus', action='store_true',
-                    help='use moco v2 data augmentation')
+# parser.add_argument('--aug-plus', action='store_true',
+#                     help='use moco v2 data augmentation')
 parser.add_argument('--cos', action='store_true',
                     help='use cosine lr schedule')
 
-
 def main():
     args = parser.parse_args()
-
-    if args.seed is not None:
-        random.seed(args.seed)
-        torch.manual_seed(args.seed)
-        cudnn.deterministic = True
-        warnings.warn('You have chosen to seed training. '
-                      'This will turn on the CUDNN deterministic setting, '
-                      'which can slow down your training considerably! '
-                      'You may see unexpected behavior when restarting '
-                      'from checkpoints.')
-
-    if args.gpu is not None:
-        warnings.warn('You have chosen a specific GPU. This will completely '
-                      'disable data parallelism.')
-
-    main_worker(args.gpu, args)
-
-
-def main_worker(gpu, args):
     tgs = ['MoCo_SingleGPU']
     wandb.init(entity='andmcnutt', project='DDG_model_Regression',config=args, tags=tgs)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -171,7 +134,8 @@ def main_worker(gpu, args):
     # Data loading code
     train_dataset = moco.loader.TwoMolDataset(
         args.data,
-        ligmolcache=args.ligmolcache, recmolcache=args.recmolcache)
+        ligmolcache=args.ligmolcache, recmolcache=args.recmolcache, data_root=args.dataroot,
+        random_translation=2, random_rotation=True,dtype=torch.float32)
     #Need to use random trans/rot when actually running
 
     train_sampler = None
@@ -221,7 +185,9 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
 
         # compute output
         output, target = model(im_q=images[0], im_k=images[1])
+        print(output.is_cuda, target.is_cuda)
         loss = criterion(output, target)
+        print(loss.is_cuda)
         total_loss += loss
 
         # acc1/acc5 are (K+1)-way contrast classifier accuracy

@@ -110,10 +110,12 @@ class MoCo(nn.Module):
         Output:
             logits, targets
         """
-
+        print("In forward")
         # compute query features
         q = self.encoder_q(im_q)  # queries: NxC
+        print(q.is_cuda)
         q = nn.functional.normalize(q, dim=1)
+        print(q.is_cuda)
 
         # compute key features
         with torch.no_grad():  # no gradient to keys
