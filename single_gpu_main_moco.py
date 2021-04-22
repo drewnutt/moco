@@ -38,7 +38,7 @@ parser.add_argument('--ligmolcache', metavar='LIGCACHE',
 parser.add_argument('--recmolcache', metavar='RECCACHE',
                     required=True, help='path to recmolcache')
 parser.add_argument('--dataroot', metavar='DATAROOT',
-                    required=False, default="", help='path to dataroot')
+                    default="", help='path to dataroot')
 parser.add_argument('-a', '--arch', metavar='ARCH', default='default2018',
                     help='model architecture (default: default2018)')
 parser.add_argument('-j', '--workers', default=1, type=int, metavar='N',
