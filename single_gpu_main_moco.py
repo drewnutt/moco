@@ -38,7 +38,7 @@ parser.add_argument('--ligmolcache', metavar='LIGCACHE',
 parser.add_argument('--recmolcache', metavar='RECCACHE',
                     required=True, help='path to recmolcache')
 parser.add_argument('--dataroot', metavar='DATAROOT',
-                    required=False, help='path to dataroot')
+                    required=False, default="", help='path to dataroot')
 parser.add_argument('-a', '--arch', metavar='ARCH', default='default2018',
                     help='model architecture (default: default2018)')
 parser.add_argument('-j', '--workers', default=1, type=int, metavar='N',
@@ -132,24 +132,24 @@ def main():
     cudnn.benchmark = True
 
     # Data loading code
-    train_dataset = moco.loader.TwoMolDataset(
+    train_dataset = molgrid.torch_bindings.MolDataset(
         args.data,
-        ligmolcache=args.ligmolcache, recmolcache=args.recmolcache, data_root=args.dataroot,
-        random_translation=2, random_rotation=True,dtype=torch.float32)
-    #Need to use random trans/rot when actually running
+        ligmolcache=args.ligmolcache, recmolcache=args.recmolcache, data_root=args.dataroot)
+    gmaker = molgrid.GridMaker()
+    shape = gmaker.grid_dimensions(28)
 
     train_sampler = None
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
-        num_workers=args.workers, sampler=train_sampler, drop_last=True)
+        num_workers=args.workers, sampler=train_sampler, drop_last=True,collate_fn=moco.loader.collateMolDataset)
 
     wandb.watch(model, log='all')
     for epoch in range(args.start_epoch, args.epochs):
         adjust_learning_rate(optimizer, epoch, args)
 
         # train for one epoch
-        train(train_loader, model, criterion, optimizer, epoch, args)
+        train(train_loader, model, criterion, optimizer, gmaker, shape, epoch, args)
 
         save_checkpoint({
             'epoch': epoch + 1,
@@ -159,7 +159,7 @@ def main():
         }, is_best=False, filename='checkpoint_{:04d}.pth.tar'.format(epoch))
 
 
-def train(train_loader, model, criterion, optimizer, epoch, args):
+def train(train_loader, model, criterion, optimizer, gmaker, tensorshape, epoch, args):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
@@ -175,25 +175,35 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
 
     end = time.time()
     total_loss = 0
-    for i, (images, _) in enumerate(train_loader):
+    for i, (lengths, center, coords, types, radii, _) in enumerate(train_loader):
+        types = types.cuda(args.gpu, non_blocking=True)
+        radii = radii.squeeze().cuda(args.gpu, non_blocking=True)
+        coords = coords.cuda(args.gpu, non_blocking=True)
+        coords_q = torch.empty(*coords.shape,device=coords.device,dtype=coords.dtype)
+        batch_size = coords.shape[0]
+        if batch_size != types.shape[0] or batch_size != radii.shape[0]:
+            raise RuntimeError("Inconsistent batch sizes in dataset outputs")
+        output1 = torch.empty(batch_size,*tensorshape,dtype=coords.dtype,device=coords.device)
+        output2 = torch.empty(batch_size,*tensorshape,dtype=coords.dtype,device=coords.device)
+        for idx in range(batch_size):
+            t = molgrid.Transform(molgrid.float3(*(center[idx].numpy().tolist())),random_translate=2,random_rotation=True)
+            t.forward(coords[idx][:lengths[idx]],coords_q[idx][:lengths[idx]])
+            gmaker.forward(t.get_rotation_center(), coords_q[idx][:lengths[idx]], types[idx][:lengths[idx]], radii[idx][:lengths[idx]], molgrid.tensor_as_grid(output1[idx]))
+            t.forward(coords[idx][:lengths[idx]],coords[idx][:lengths[idx]])
+            gmaker.forward(t.get_rotation_center(), coords[idx][:lengths[idx]], types[idx][:lengths[idx]], radii[idx][:lengths[idx]], molgrid.tensor_as_grid(output2[idx]))
+
         # measure data loading time
         data_time.update(time.time() - end)
 
-        if args.gpu is not None:
-            images[0] = images[0].cuda(args.gpu, non_blocking=True)
-            images[1] = images[1].cuda(args.gpu, non_blocking=True)
-
         # compute output
-        output, target = model(im_q=images[0], im_k=images[1])
-        print(output.is_cuda, target.is_cuda)
+        output, target = model(im_q=output1, im_k=output2)
         loss = criterion(output, target)
-        print(loss.is_cuda)
         total_loss += loss
 
         # acc1/acc5 are (K+1)-way contrast classifier accuracy
         # measure accuracy and record loss
         # acc1, acc5 = accuracy(output, target, topk=(1, 5))
-        losses.update(loss.item(), images[0].size(0))
+        losses.update(loss.item(), output1.size(0))
         # top1.update(acc1[0], images[0].size(0))
         # top5.update(acc5[0], images[0].size(0))
 
