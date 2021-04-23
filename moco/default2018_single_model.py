@@ -47,7 +47,6 @@ class Net(nn.Module):
         self.add_module('flatten',flattener)
         self.modules.append(flattener)
         self.fc = nn.Linear(last_size,num_classes)
-        self.add_module('last_fc',self.fc)
 
     def forward(self, x): 
         for layer in self.modules:
