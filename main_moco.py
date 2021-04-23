@@ -10,6 +10,7 @@ import time
 import warnings
 
 import molgrid
+import wandb
 
 import torch
 import torch.nn as nn
@@ -69,7 +70,7 @@ parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
 parser.add_argument('--world-size', default=-1, type=int,
                     help='number of nodes for distributed training')
-parser.add_argument('--rank', default=-1, type=int,
+parser.add_argument('--local_rank', default=-1, type=int,
                     help='node rank for distributed training')
 parser.add_argument('--dist-url', default='env://', type=str,
                     help='url used to set up distributed training')
@@ -98,8 +99,6 @@ parser.add_argument('--moco-t', default=0.07, type=float,
 # options for moco v2
 parser.add_argument('--mlp', action='store_true',
                     help='use mlp head')
-parser.add_argument('--aug-plus', action='store_true',
-                    help='use moco v2 data augmentation')
 parser.add_argument('--cos', action='store_true',
                     help='use cosine lr schedule')
 
@@ -134,7 +133,8 @@ def main():
         # Use torch.multiprocessing.spawn to launch distributed processes: the
         # main_worker process function
         print(f"GPUs per node:{ngpus_per_node}\nWorld Size:{args.world_size}")
-        mp.spawn(main_worker, nprocs=ngpus_per_node, args=(ngpus_per_node, args))
+        # mp.spawn(main_worker, nprocs=ngpus_per_node, args=(ngpus_per_node, args))
+        main_worker(args.local_rank, ngpus_per_node, args)
     else:
         # Simply call main_worker function
         main_worker(args.gpu, ngpus_per_node, args)
@@ -143,26 +143,28 @@ def main():
 def main_worker(gpu, ngpus_per_node, args):
     args.gpu = gpu
 
-    suppress printing if not master
+    # suppress printing if not master
     if args.multiprocessing_distributed and args.gpu != 0:
         def print_pass(*args):
             pass
         builtins.print = print_pass
+    else:
+        tgs = ['MoCo_MultiGPU']
+        wandb.init(entity='andmcnutt', project='DDG_model_Regression',config=args, tags=tgs)
 
     if args.gpu is not None:
         print("Use GPU: {} for training".format(args.gpu))
 
     if args.distributed:
-        if args.dist_url == "env://" and args.rank == -1:
-            args.rank = int(os.environ["RANK"])
+        if args.dist_url == "env://" and args.local_rank == -1:
+            args.local_rank = int(os.environ["RANK"])
         if args.multiprocessing_distributed:
             # For multiprocessing distributed training, rank needs to be the
             # global rank among all the processes
             # args.rank = args.rank * ngpus_per_node + gpu
-            args.rank = gpu
-            print(f"rank:{args.rank}")
+            print(f"rank:{args.local_rank}")
         dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
-                                world_size=args.world_size, rank=args.rank)
+                                world_size=args.world_size, rank=args.local_rank)
     # create model
     print("=> creating model '{}'".format(args.arch))
     model = moco.builder.MoCo(
@@ -182,7 +184,7 @@ def main_worker(gpu, ngpus_per_node, args):
             # ourselves based on the total number of GPUs we have
             args.batch_size = int(args.batch_size / ngpus_per_node)
             args.workers = int((args.workers + ngpus_per_node - 1) / ngpus_per_node)
-            model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
+            model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], output_device=args.gpu)
         else:
             model.cuda()
             # DistributedDataParallel will divide and allocate batch_size to all
@@ -226,30 +228,33 @@ def main_worker(gpu, ngpus_per_node, args):
     cudnn.benchmark = True
 
     # Data loading code
-    train_dataset = moco.loader.TwoMolDataset(
-        args.data,
+    train_dataset = molgrid.MolDataset(
+        args.data, data_root=args.dataroot,
         ligmolcache=args.ligmolcache, recmolcache=args.recmolcache)
     #Need to use random trans/rot when actually running
+    gmaker = molgrid.GridMaker()
+    shape = gmaker.grid_dimensions(28)
 
     if args.distributed:
-        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle=True)
     else:
         train_sampler = None
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
-        num_workers=args.workers, pin_memory=True, sampler=train_sampler, drop_last=True)
+        num_workers=args.workers, pin_memory=True, sampler=train_sampler, drop_last=True, collate_fn=moco.loader.collateMolDataset)
 
     for epoch in range(args.start_epoch, args.epochs):
-        if args.distributed:
-            train_sampler.set_epoch(epoch)
+        train_sampler.set_epoch(epoch)
         adjust_learning_rate(optimizer, epoch, args)
 
         # train for one epoch
-        train(train_loader, model, criterion, optimizer, epoch, args)
+        loss = train(train_loader, model, criterion, optimizer, gmaker, shape, epoch, args)
+        if args.local_rank == 0:
+            wandb.log({'Loss':loss})
 
         if not args.multiprocessing_distributed or (args.multiprocessing_distributed
-                and args.rank % ngpus_per_node == 0):
+                and args.local_rank % ngpus_per_node == 0):
             save_checkpoint({
                 'epoch': epoch + 1,
                 'arch': args.arch,
@@ -258,39 +263,53 @@ def main_worker(gpu, ngpus_per_node, args):
             }, is_best=False, filename='checkpoint_{:04d}.pth.tar'.format(epoch))
 
 
-def train(train_loader, model, criterion, optimizer, epoch, args):
+def train(train_loader, model, criterion, optimizer, gmaker, tensorshape, epoch, args):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
-    top1 = AverageMeter('Acc@1', ':6.2f')
-    top5 = AverageMeter('Acc@5', ':6.2f')
+    # top1 = AverageMeter('Acc@1', ':6.2f')
+    # top5 = AverageMeter('Acc@5', ':6.2f')
     progress = ProgressMeter(
         len(train_loader),
-        [batch_time, data_time, losses, top1, top5],
+        [batch_time, data_time, losses],
         prefix="Epoch: [{}]".format(epoch))
 
     # switch to train mode
     model.train()
 
+    total_loss = 0
     end = time.time()
-    for i, (images, _) in enumerate(train_loader):
+    for i, (lengths, center, coords, types, radii, _) in enumerate(train_loader):
+        types = types.cuda(args.gpu, non_blocking=True)
+        radii = radii.squeeze().cuda(args.gpu, non_blocking=True)
+        coords = coords.cuda(args.gpu, non_blocking=True)
+        coords_q = torch.empty(*coords.shape,device=coords.device,dtype=coords.dtype)
+        batch_size = coords.shape[0]
+        if batch_size != types.shape[0] or batch_size != radii.shape[0]:
+            raise RuntimeError("Inconsistent batch sizes in dataset outputs")
+        output1 = torch.empty(batch_size,*tensorshape,dtype=coords.dtype,device=coords.device)
+        output2 = torch.empty(batch_size,*tensorshape,dtype=coords.dtype,device=coords.device)
+        for idx in range(batch_size):
+            t = molgrid.Transform(molgrid.float3(*(center[idx].numpy().tolist())),random_translate=2,random_rotation=True)
+            t.forward(coords[idx][:lengths[idx]],coords_q[idx][:lengths[idx]])
+            gmaker.forward(t.get_rotation_center(), coords_q[idx][:lengths[idx]], types[idx][:lengths[idx]], radii[idx][:lengths[idx]], molgrid.tensor_as_grid(output1[idx]))
+            t.forward(coords[idx][:lengths[idx]],coords[idx][:lengths[idx]])
+            gmaker.forward(t.get_rotation_center(), coords[idx][:lengths[idx]], types[idx][:lengths[idx]], radii[idx][:lengths[idx]], molgrid.tensor_as_grid(output2[idx]))
+
         # measure data loading time
         data_time.update(time.time() - end)
 
-        if args.gpu is not None:
-            images[0] = images[0].cuda(args.gpu, non_blocking=True)
-            images[1] = images[1].cuda(args.gpu, non_blocking=True)
-
         # compute output
-        output, target = model(im_q=images[0], im_k=images[1])
+        output, target = model(im_q=output1, im_k=output2)
         loss = criterion(output, target)
+        total_loss += float(loss.item())
 
         # acc1/acc5 are (K+1)-way contrast classifier accuracy
         # measure accuracy and record loss
-        acc1, acc5 = accuracy(output, target, topk=(1, 5))
-        losses.update(loss.item(), images[0].size(0))
-        top1.update(acc1[0], images[0].size(0))
-        top5.update(acc5[0], images[0].size(0))
+        # acc1, acc5 = accuracy(output, target, topk=(1, 5))
+        losses.update(loss.item(), output1.size(0))
+        # top1.update(acc1[0], images[0].size(0))
+        # top5.update(acc5[0], images[0].size(0))
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
@@ -303,6 +322,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
 
         if i % args.print_freq == 0:
             progress.display(i)
+    return total_loss/len(train_loader.dataset)
 
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
