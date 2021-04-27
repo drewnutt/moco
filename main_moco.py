@@ -285,6 +285,8 @@ def train(train_loader, model, criterion, optimizer, gmaker, tensorshape, epoch,
         coords = coords.cuda(args.gpu, non_blocking=True)
         coords_q = torch.empty(*coords.shape,device=coords.device,dtype=coords.dtype)
         batch_size = coords.shape[0]
+        if i == 0:
+            print(batch_size)
         if batch_size != types.shape[0] or batch_size != radii.shape[0]:
             raise RuntimeError("Inconsistent batch sizes in dataset outputs")
         output1 = torch.empty(batch_size,*tensorshape,dtype=coords.dtype,device=coords.device)
