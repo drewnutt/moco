@@ -28,9 +28,9 @@ class MoCo(nn.Module):
         self.encoder_k = default2018((28,48,48,48),num_classes=dim)
 
         if mlp:  # hack: brute-force replacement
-            dim_mlp = self.encoder_q.fc.weight.shape[1]
-            self.encoder_q.fc = nn.Sequential(nn.Linear(dim_mlp, dim_mlp), nn.ReLU(), self.encoder_q.fc)
-            self.encoder_k.fc = nn.Sequential(nn.Linear(dim_mlp, dim_mlp), nn.ReLU(), self.encoder_k.fc)
+            dim_mlp = self.encoder_q.fc.weight.shape[0]
+            self.encoder_q.fc = nn.Sequential(self.encoder_q.fc, nn.ReLU(), nn.Linear(dim_mlp, dim_mlp))
+            self.encoder_k.fc = nn.Sequential(self.encoder_k.fc, nn.ReLU(), nn.Linear(dim_mlp, dim_mlp))
 
         for param_q, param_k in zip(self.encoder_q.parameters(), self.encoder_k.parameters()):
             param_k.data.copy_(param_q.data)  # initialize
