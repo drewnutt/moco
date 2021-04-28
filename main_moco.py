@@ -250,6 +250,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
         # train for one epoch
         loss = train(train_loader, model, criterion, optimizer, gmaker, shape, epoch, args)
+        print(f'Epoch: {epoch}, Loss:{loss}')
         if args.local_rank == 0:
             wandb.log({'Loss':loss})
 
@@ -285,8 +286,6 @@ def train(train_loader, model, criterion, optimizer, gmaker, tensorshape, epoch,
         coords = coords.cuda(args.gpu, non_blocking=True)
         coords_q = torch.empty(*coords.shape,device=coords.device,dtype=coords.dtype)
         batch_size = coords.shape[0]
-        if i == 0:
-            print(batch_size)
         if batch_size != types.shape[0] or batch_size != radii.shape[0]:
             raise RuntimeError("Inconsistent batch sizes in dataset outputs")
         output1 = torch.empty(batch_size,*tensorshape,dtype=coords.dtype,device=coords.device)
@@ -297,6 +296,9 @@ def train(train_loader, model, criterion, optimizer, gmaker, tensorshape, epoch,
             gmaker.forward(t.get_rotation_center(), coords_q[idx][:lengths[idx]], types[idx][:lengths[idx]], radii[idx][:lengths[idx]], molgrid.tensor_as_grid(output1[idx]))
             t.forward(coords[idx][:lengths[idx]],coords[idx][:lengths[idx]])
             gmaker.forward(t.get_rotation_center(), coords[idx][:lengths[idx]], types[idx][:lengths[idx]], radii[idx][:lengths[idx]], molgrid.tensor_as_grid(output2[idx]))
+
+        del lengths, center, coords, types, radii
+        torch.cuda.empty_cache()
 
         # measure data loading time
         data_time.update(time.time() - end)

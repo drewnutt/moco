@@ -42,7 +42,6 @@ class Net(nn.Module):
         self.modules.append(conv5)
         div = 2*2*2
         last_size = int(dims[1]//div * dims[2]//div * dims[3]//div * 128)
-        print(last_size)
         flattener = View((-1,last_size))
         self.add_module('flatten',flattener)
         self.modules.append(flattener)
