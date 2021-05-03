@@ -87,6 +87,8 @@ parser.add_argument('--cos', action='store_true',
 # option for adding labels
 parser.add_argument('--semi-super',action='store_true',
                     help='Use semi-supervised training for available labels')
+parser.add_argument('--clip',default=1.0,type=float,
+                    help='Value to use to clip gradients (to prevent exploding gradients)')
  
 def main():
     args = parser.parse_args()
@@ -167,11 +169,12 @@ def train(train_loader, model, criterion, optimizer, gmaker, tensorshape, epoch,
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
+    slosses = AverageMeter('Loss', ':.4e')
     # top1 = AverageMeter('Acc@1', ':6.2f')
     # top5 = AverageMeter('Acc@5', ':6.2f')
     progress = ProgressMeter(
         len(train_loader),
-        [batch_time, data_time, losses],
+        [batch_time, data_time, losses, slosses],
         prefix="Epoch: [{}]".format(epoch))
 
     # switch to train mode
@@ -179,6 +182,7 @@ def train(train_loader, model, criterion, optimizer, gmaker, tensorshape, epoch,
 
     end = time.time()
     total_loss = 0
+    super_loss = 0
     for i, (lengths, center, coords, types, radii, afflabel) in enumerate(train_loader):
         deltaG = afflabel.cuda(args.gpu,non_blocking=True)
         types = types.cuda(args.gpu, non_blocking=True)
@@ -203,23 +207,31 @@ def train(train_loader, model, criterion, optimizer, gmaker, tensorshape, epoch,
         data_time.update(time.time() - end)
 
         # compute output
-        output, target, preds = model(im_q=output1, im_k=output2)
+        output, target, preds, reps = model(im_q=output1, im_k=output2)
         loss = criterion(output, target)
         if args.semi_super:
+            if i == 0:
+                print(preds[:10])
+                print(deltaG[:10])
             lossmask = deltaG.gt(0)
-            loss += torch.mean(lossmask * nn.functional.mse_loss(preds, deltaG, reduction='none'))
-        total_loss += loss
+            sloss = torch.sum(lossmask * nn.functional.mse_loss(preds, deltaG, reduction='none'))/lossmask.sum()
+            super_loss += sloss.item()
+            loss += sloss
+        total_loss += loss.item()
 
         # acc1/acc5 are (K+1)-way contrast classifier accuracy
         # measure accuracy and record loss
         # acc1, acc5 = accuracy(output, target, topk=(1, 5))
         losses.update(loss.item(), output1.size(0))
+        if args.semi_super:
+            slosses.update(sloss.item(), lossmask.sum())
         # top1.update(acc1[0], images[0].size(0))
         # top5.update(acc5[0], images[0].size(0))
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
         optimizer.step()
 
         # measure elapsed time
@@ -228,6 +240,8 @@ def train(train_loader, model, criterion, optimizer, gmaker, tensorshape, epoch,
 
         if i % args.print_freq == 0:
             progress.display(i)
+    if args.semi_super:
+        wandb.log({"Supervised Loss": super_loss/len(train_loader)},commit=False)
     wandb.log({"Total Loss": total_loss/len(train_loader)})
 
 
