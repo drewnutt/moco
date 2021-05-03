@@ -1,4 +1,5 @@
 import re
+import os.path
 import molgrid
 import numpy as np
 import torch
@@ -26,7 +27,6 @@ parser.add_argument('--recte', required=True, help='location of testing receptor
 parser.add_argument('--testfile', required=True, help='location of testing information, this must have a group indicator')
 parser.add_argument('--lr', default=0.01, type=float, help='learning rate')
 parser.add_argument('--dropout', '-d',default=0, type=float,help='dropout of layers')
-parser.add_argument('--non_lin',choices=['relu','leakyrelu'],default='relu',help='non-linearity to use in the network')
 parser.add_argument('--momentum', default=0.9, type=float, help='momentum of optimizer')
 parser.add_argument('--solver', default="adam", choices=('adam','sgd'), type=str, help="solver to use")
 parser.add_argument('--epoch',default=200,type=int,help='number of epochs to train for (default %(default)d)')
@@ -35,35 +35,21 @@ parser.add_argument('--batch_norm',default=0,choices=[0,1],type=int,help='use ba
 parser.add_argument('--weight_decay',default=0,type=float,help='weight decay to use with the optimizer')
 parser.add_argument('--clip',default=0,type=float,help='keep gradients within [clip]')
 parser.add_argument('--binary_rep',default=False,action='store_true',help='use a binary representation of the atoms')
+parser.add_argument('--batch_size',default=64,type=int,help='batch size for training and testing')
 parser.add_argument('--extra_stats',default=False,action='store_true',help='keep statistics about per receptor R values') 
-parser.add_argument('--use_model','-m',default='paper',choices=['paper', 'def2018', 'extend_def2018', 'multtask_def2018','ext_mult_def2018', 'multtask_latent_def2018'], help='Network architecture to use')
+# parser.add_argument('--use_model','-m',default='paper',choices=['paper', 'def2018', 'extend_def2018', 'multtask_def2018','ext_mult_def2018', 'multtask_latent_def2018'], help='Network architecture to use')
+parser.add_argument('--last_layer',default=0,type=int, choices=[0,1],help='retrain the last fully connected layer of the learned representation')
 parser.add_argument('--use_weights','-w',help='pretrained weights to use for the model')
-parser.add_argument('--freeze_arms',choices=[0,1],default=0,type=int,help='freeze the weights of the CNN arms of the network (applies after using pretrained weights)')
-parser.add_argument('--hidden_size',default=128,type=int,help='size of fully connected layer before subtraction in latent space')
+parser.add_argument('--rep_size',default=128,type=int,help='size of representation layer before subtraction in latent space')
 parser.add_argument('--absolute_dg_loss', '-L',action='store_true',default=False,help='use a loss function (and model architecture) that utilizes the absolute binding affinity')
-parser.add_argument('--self_supervised_test', '-S',action='store_true',default=False,help='Use the self supervised loss on the test files (no labels used)')
 parser.add_argument('--rotation_loss_weight','-R',default=1.0,type=float,help='weight to use in adding the rotation loss to the other losses (default: %(default)d)')
 parser.add_argument('--consistency_loss_weight','-C',default=1.0,type=float,help='weight to use in adding the consistency term to the other losses (default: %(default)d')
 parser.add_argument('--absolute_loss_weight','-A',default=1.0,type=float,help='weight to use in adding the absolute loss terms to the other losses (default: %(default)d')
 parser.add_argument('--ddg_loss_weight','-D',default=1.0,type=float,help='weight to use in adding the DDG loss terms to the other losses (default: %(default)d')
-parser.add_argument('--train_type',default='no_SS', choices=['no_SS','SS_simult_before','SS_simult_after'],help='what type of training loop to use')
 args = parser.parse_args()
 
-print(args.absolute_dg_loss, args.use_model)
-assert (args.absolute_dg_loss and args.use_model in ['multtask_def2018', 'ext_mult_def2018', 'multtask_latent_def2018']) or (not args.absolute_dg_loss and args.use_model in ['paper','def2018','extend_def2018']), 'Cannot have multitask loss with a non-multitask model'
-
-if args.use_model == 'paper':
-    from paper_model import Net
-elif args.use_model == 'def2018':
-    from default2018_model import Net
-elif args.use_model == 'extend_def2018':
-    from extended_default2018_model import Net
-elif args.use_model == 'multtask_def2018':
-    from multtask_def2018_model import Net
-elif args.use_model == 'multtask_latent_def2018':
-    from multtask_latent_def2018_model import Net
-elif args.use_model == 'ext_mult_def2018':
-    from extended_multtask_def2018_model import Net
+# print(args.absolute_dg_loss, args.use_model)
+# assert (args.absolute_dg_loss and args.use_model in ['multtask_def2018', 'ext_mult_def2018', 'multtask_latent_def2018']) or (not args.absolute_dg_loss and args.use_model in ['paper','def2018','extend_def2018']), 'Cannot have multitask loss with a non-multitask model'
 
 def weights_init(m):
     if isinstance(m, nn.Conv3d) or isinstance(m, nn.Linear):
@@ -71,7 +57,7 @@ def weights_init(m):
         if m.bias is not None:
             init.constant_(m.bias.data, 0)
 
-def train(model, traine, test_data, optimizer):
+def train(model, traine, optimizer):
     model.eval() ## in case there are BNs or similar layers in the trained rep models
     full_loss, lig_loss, rot_loss, DDG_loss = 0, 0, 0, 0
 
@@ -224,11 +210,10 @@ def test(model, test_data,test_recs_split=None):
 # Make helper function to make meaningful tags
 def make_tags(args):
     addnl_tags = []
-    addnl_tags.append(args.use_model)
+    addnl_tags.append('default2018')
     if 'full_bdb' in args.ligtr:
         addnl_tags.append('full_BDB')
     addnl_tags.append('MoCo_rep')
-    addnl_tags.append(args.train_type)
     return addnl_tags
 
 
@@ -236,7 +221,7 @@ tgs = make_tags(args) + args.tags
 wandb.init(entity='andmcnutt', project='DDG_model_Regression',config=args, tags=tgs)
 
 #Parameters that are not important for hyperparameter sweep
-batch_size = 16
+batch_size = args.batch_size
 epochs = args.epoch
 
 # print('ligtr={}, rectr={}'.format(args.ligtr,args.rectr))
@@ -247,31 +232,13 @@ traine = molgrid.ExampleProvider(ligmolcache=args.ligtr, recmolcache=args.rectr,
 traine.populate(args.trainfile)
 teste = molgrid.ExampleProvider(ligmolcache=args.ligte, recmolcache=args.recte, shuffle=True, duplicate_first=True, default_batch_size=batch_size, iteration_scheme=molgrid.IterationScheme.SmallEpoch)
 teste.populate(args.testfile)
-ss_test = molgrid.ExampleProvider(ligmolcache=args.ligte, recmolcache=args.recte, shuffle=True, duplicate_first=True, default_batch_size=batch_size, iteration_scheme=molgrid.IterationScheme.LargeEpoch)
-ss_test.populate(args.testfile)
-# To compute the "average" pearson R per receptor, count the number of pairs for each rec then iterate over that number later during test time
-# test_exs_per_rec=dict()
-# with open(args.testfile) as test_types:
-#     count = 0
-#     rec = ''
-#     for lineuse a loss function (and model architecture) that utilizes the absolute binding affinity in test_types:
-#         line_args = line.split(' ')
-#         newrec = re.findall(r'([A-Z0-9]{4})/',line_args[4])[0]
-#         if newrec != rec:
-#             if count > 0:
-#                 test_exs_per_rec[rec] = count
-#                 count = 1
-#             rec = newrec
-#         else:
-#             count += 1
 
 gmaker = molgrid.GridMaker(binary=args.binary_rep)
 dims = gmaker.grid_dimensions(14*4)  # only one rec+onelig per example
 tensor_shape = (batch_size,)+dims
 
 actual_dims = (dims[0]//2, *dims[1:])
-rep_size = 128
-siam_arm = default2018(actual_dims,rep_size)
+siam_arm = default2018(actual_dims,args.rep_size)
 if args.use_weights is not None:
     if os.path.isfile(args.use_weights):
         print("=> loading checkpoint '{}'".format(args.use_weights))
@@ -289,6 +256,7 @@ if args.use_weights is not None:
                     if check_num in ['0','2']:
                         if check_num == '2':
                             del state_dict[k]
+                            continue
                         else:
                             del_end = -2
                 # remove prefix
@@ -305,10 +273,12 @@ if args.use_weights is not None:
 
         # freeze all layers but the last fc
         for name, param in siam_arm.named_parameters():
+            if args.last_layer and name in ['fc.weight','fc.bias']:
+                continue
             param.requires_grad = False
     else:
-        print("=> no checkpoint found at '{}', training whole model".format(args.pretrained))
-model = SiameseNet(siam_arm, rep_size)
+        print("=> no checkpoint found at '{}', training whole model".format(args.use_weights))
+model = SiameseNet(siam_arm, args.rep_size)
 
 model.to('cuda:0')
 for name, param in siam_arm.named_parameters():
@@ -319,7 +289,10 @@ for name, param in siam_arm.named_parameters():
 
 # optimize only the linear classifier
 parameters = list(filter(lambda p: p.requires_grad, model.parameters()))
-assert len(parameters) == 4  # dg.weight, dg.bias, ddg.weight, ddg.bias
+if args.last_layer:
+    assert len(parameters) == 6  # fc.weight, fc.bias, dg.weight, dg.bias, ddg.weight, ddg.bias
+else:
+    assert len(parameters) == 4  # dg.weight, dg.bias, ddg.weight, ddg.bias
 optimizer = optim.SGD(parameters, lr=args.lr, weight_decay=args.weight_decay)
 if args.solver == "adam":
     optimizer = optim.Adam(parameters, lr=args.lr, weight_decay=args.weight_decay)
@@ -344,62 +317,59 @@ wandb.watch(model, log='all')
 print('extra stats:{}'.format(args.extra_stats))
 print('training now')
 ## I want to see how the model is doing on the test before even training, mostly for the pretrained models
-tt_loss, out_d, tt_r, tt_rmse, tt_act, tt_rave, tt_r_per_rec = test(model, teste, latent_rep)
+tt_loss, out_d, tt_r, tt_rmse, tt_act, tt_rave, tt_r_per_rec = test(model, teste)
 print(f'Before Training at all:\n\tTest Loss: {tt_loss}\n\tTest R:{tt_r}\n\tTest RMSE:{tt_rmse}')
 for epoch in range(1, epochs+1):
     # if args.self_supervised_test:
     #     ss_loss = train_rotation(model, teste, optimizer, latent_rep)
     # tr_loss, out_dist, tr_r, tr_rmse, tr_act = train(model, traine, optimizer, latent_rep)
-    tr_loss, out_dist, tr_r, tr_rmse, tr_act = train(model, traine, ss_test, optimizer)
+    tr_loss, out_dist, tr_r, tr_rmse, tr_act = train(model, traine, optimizer)
     tt_loss, out_d, tt_r, tt_rmse, tt_act, tt_rave, tt_r_per_rec = test(model, teste)
-    if args.absolute_dg_loss:
-        scheduler.step(tr_loss[0])
-    else:
-        scheduler.step(tr_loss)
+    scheduler.step(tr_loss[0])
     
     wandb.log({"Output Distribution Train": wandb.Histogram(np.array(out_dist[0]))}, commit=False)
     wandb.log({"Output Distribution Test": wandb.Histogram(np.array(out_d[0]))}, commit=False)
-    if epoch % 10 == 0: # only log the graphs every 10 epochs, make things a bit faster
-        fig = plt.figure(1)
-        fig.clf()
-        plt.scatter(tr_act[0], out_dist[0])
-        plt.xlabel('Actual DDG')
-        plt.ylabel('Predicted DDG')
-        wandb.log({"Actual vs. Predicted DDG (Train)": fig}, commit=False)
-        test_fig = plt.figure(2)
-        test_fig.clf()
-        plt.scatter(tt_act[0], out_d[0])  # the first one is the ddg
-        plt.xlabel('Actual DDG')
-        plt.ylabel('Predicted DDG')
-        wandb.log({"Actual vs. Predicted DDG (Test)": test_fig}, commit=False)
-        train_absaff_fig = plt.figure(3)
-        train_absaff_fig.clf()
-        plt.scatter(tr_act[1],out_dist[1])
-        plt.xlabel('Actual affinity')
-        plt.ylabel('Predicted affinity')
-        wandb.log({"Actual vs. Predicted Affinity (Train)": train_absaff_fig})
-        test_absaff_fig = plt.figure(4)
-        test_absaff_fig.clf()
-        plt.scatter(tt_act[1],out_d[1])
-        plt.xlabel('Actual affinity')
-        plt.ylabel('Predicted affinity')
-        wandb.log({"Actual vs. Predicted Affinity (Test)": test_absaff_fig})
-        if args.extra_stats:
-            rperr_fig = plt.figure(3)
-            rperr_fig.clf()
-            sorted_test_rperrec = dict(sorted(tt_r_per_rec.items(), key=lambda item: item[0]))
-            rec_pdbs, rvals = list(sorted_test_rperrec.keys()),list(sorted_test_rperrec.values())
-            plt.bar(list(range(len(rvals))),rvals,tick_label=rec_pdbs)
-            plt.ylabel("Pearson's R value")
-            wandb.log({"R Value Per Receptor (Test)": rperr_fig},commit=False)
-            rvsnligs_fig=plt.figure(4)
-            rvsnligs_fig.clf()
-            sorted_num_ligs = dict(sorted(test_exs_per_rec.items(),key=lambda item: item[0]))
-            num_ligs = list(sorted_num_ligs.values())
-            plt.scatter(num_ligs,rvals)
-            plt.xlabel('number of ligands (test)')
-            plt.ylabel("Pearson's R")
-            wandb.log({"R Value Per Num_Ligs (Test)": rvsnligs_fig},commit=False)
+    # if epoch % 10 == 0: # only log the graphs every 10 epochs, make things a bit faster
+    #     fig = plt.figure(1)
+    #     fig.clf()
+    #     plt.scatter(tr_act[0], out_dist[0])
+    #     plt.xlabel('Actual DDG')
+    #     plt.ylabel('Predicted DDG')
+    #     wandb.log({"Actual vs. Predicted DDG (Train)": fig}, commit=False)
+    #     test_fig = plt.figure(2)
+    #     test_fig.clf()
+    #     plt.scatter(tt_act[0], out_d[0])  # the first one is the ddg
+    #     plt.xlabel('Actual DDG')
+    #     plt.ylabel('Predicted DDG')
+    #     wandb.log({"Actual vs. Predicted DDG (Test)": test_fig}, commit=False)
+    #     train_absaff_fig = plt.figure(3)
+    #     train_absaff_fig.clf()
+    #     plt.scatter(tr_act[1],out_dist[1])
+    #     plt.xlabel('Actual affinity')
+    #     plt.ylabel('Predicted affinity')
+    #     wandb.log({"Actual vs. Predicted Affinity (Train)": train_absaff_fig})
+    #     test_absaff_fig = plt.figure(4)
+    #     test_absaff_fig.clf()
+    #     plt.scatter(tt_act[1],out_d[1])
+    #     plt.xlabel('Actual affinity')
+    #     plt.ylabel('Predicted affinity')
+    #     wandb.log({"Actual vs. Predicted Affinity (Test)": test_absaff_fig})
+    #     if args.extra_stats:
+    #         rperr_fig = plt.figure(3)
+    #         rperr_fig.clf()
+    #         sorted_test_rperrec = dict(sorted(tt_r_per_rec.items(), key=lambda item: item[0]))
+    #         rec_pdbs, rvals = list(sorted_test_rperrec.keys()),list(sorted_test_rperrec.values())
+    #         plt.bar(list(range(len(rvals))),rvals,tick_label=rec_pdbs)
+    #         plt.ylabel("Pearson's R value")
+    #         wandb.log({"R Value Per Receptor (Test)": rperr_fig},commit=False)
+    #         rvsnligs_fig=plt.figure(4)
+    #         rvsnligs_fig.clf()
+    #         sorted_num_ligs = dict(sorted(test_exs_per_rec.items(),key=lambda item: item[0]))
+    #         num_ligs = list(sorted_num_ligs.values())
+    #         plt.scatter(num_ligs,rvals)
+    #         plt.xlabel('number of ligands (test)')
+    #         plt.ylabel("Pearson's R")
+    #         wandb.log({"R Value Per Num_Ligs (Test)": rvsnligs_fig},commit=False)
 
     print(f'Test/Train AbsAff R:{tt_r[1]:.4f}\t{tr_r[1]:.4f}')
     wandb.log({
@@ -415,7 +385,7 @@ for epoch in range(1, epochs+1):
         "Avg Train Loss DDG": tr_loss[2],
         "Avg Test Loss DDG": tt_loss[2],
         "Avg Train Loss Rotation": tr_loss[3],
-        "Avg Self-Supervised Train Loss Rotation": tr_loss[4],
+        # "Avg Self-Supervised Train Loss Rotation": tr_loss[4],
         "Avg Test Loss Rotation": tt_loss[3],
         "Train R AbsAff": float(tr_r[1]),
         "Test R AbsAff": float(tt_r[1]),
