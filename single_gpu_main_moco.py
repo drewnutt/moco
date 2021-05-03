@@ -84,6 +84,10 @@ parser.add_argument('--mlp',default=True, action='store_false',
 parser.add_argument('--cos', action='store_true',
                     help='use cosine lr schedule')
 
+# option for adding labels
+parser.add_argument('--semi-super',action='store_true',
+                    help='Use semi-supervised training for available labels')
+ 
 def main():
     args = parser.parse_args()
     tgs = ['MoCo_SingleGPU']
@@ -98,7 +102,7 @@ def main():
     print("=> creating model '{}'".format(args.arch))
     model = moco.builder_single.MoCo(
         args.arch,
-        args.moco_dim, args.moco_k, args.moco_m, args.moco_t, args.mlp)
+        args.moco_dim, args.moco_k, args.moco_m, args.moco_t, args.mlp, semi_supervised=(True if args.semi_super else False))
     print(model)
 
     torch.cuda.set_device(device)
@@ -175,7 +179,8 @@ def train(train_loader, model, criterion, optimizer, gmaker, tensorshape, epoch,
 
     end = time.time()
     total_loss = 0
-    for i, (lengths, center, coords, types, radii, _) in enumerate(train_loader):
+    for i, (lengths, center, coords, types, radii, afflabel) in enumerate(train_loader):
+        deltaG = afflabel.cuda(args.gpu,non_blocking=True)
         types = types.cuda(args.gpu, non_blocking=True)
         radii = radii.squeeze().cuda(args.gpu, non_blocking=True)
         coords = coords.cuda(args.gpu, non_blocking=True)
@@ -198,8 +203,11 @@ def train(train_loader, model, criterion, optimizer, gmaker, tensorshape, epoch,
         data_time.update(time.time() - end)
 
         # compute output
-        output, target = model(im_q=output1, im_k=output2)
+        output, target, preds = model(im_q=output1, im_k=output2)
         loss = criterion(output, target)
+        if args.semi_super:
+            lossmask = deltaG.gt(0)
+            loss += torch.mean(lossmask * nn.functional.mse_loss(preds, deltaG, reduction='none'))
         total_loss += loss
 
         # acc1/acc5 are (K+1)-way contrast classifier accuracy
@@ -220,7 +228,7 @@ def train(train_loader, model, criterion, optimizer, gmaker, tensorshape, epoch,
 
         if i % args.print_freq == 0:
             progress.display(i)
-    wandb.log({"Total Loss": total_loss/len(train_loader.dataset)})
+    wandb.log({"Total Loss": total_loss/len(train_loader)})
 
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):

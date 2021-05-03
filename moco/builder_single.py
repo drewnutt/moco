@@ -9,7 +9,7 @@ class MoCo(nn.Module):
     Build a MoCo model with: a query encoder, a key encoder, and a queue
     https://arxiv.org/abs/1911.05722
     """
-    def __init__(self, base_encoder, dim=128, K=65536, m=0.999, T=0.07, mlp=True):
+    def __init__(self, base_encoder, dim=128, K=65536, m=0.999, T=0.07, mlp=True, semi_supervised=False):
         """
         dim: feature dimension (default: 128)
         K: queue size; number of negative keys (default: 65536)
@@ -26,6 +26,9 @@ class MoCo(nn.Module):
         # num_classes is the output fc dimension
         self.encoder_q = default2018((28,48,48,48),num_classes=dim)
         self.encoder_k = default2018((28,48,48,48),num_classes=dim)
+
+        if semi_supervised:
+            self.to_label = nn.Sequential(nn.ReLU(), nn.Linear(self.encoder_q.fc.weight.shape[0],1))
 
         if mlp:  # hack: brute-force replacement
             dim_mlp = self.encoder_q.fc.weight.shape[0]
@@ -112,6 +115,10 @@ class MoCo(nn.Module):
         """
         # compute query features
         q = self.encoder_q(im_q)  # queries: NxC
+        if self.to_label:
+            predictions = self.to_label(q)
+        else:
+            predictions = None
         q = nn.functional.normalize(q, dim=1)
 
         # compute key features
@@ -146,4 +153,4 @@ class MoCo(nn.Module):
         # dequeue and enqueue
         self._dequeue_and_enqueue(k)
 
-        return logits, labels
+        return logits, labels, predictions
