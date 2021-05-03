@@ -169,7 +169,7 @@ def train(train_loader, model, criterion, optimizer, gmaker, tensorshape, epoch,
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
-    slosses = AverageMeter('Loss', ':.4e')
+    slosses = AverageMeter('SuperLoss', ':.4e')
     # top1 = AverageMeter('Acc@1', ':6.2f')
     # top5 = AverageMeter('Acc@5', ':6.2f')
     progress = ProgressMeter(
@@ -207,7 +207,7 @@ def train(train_loader, model, criterion, optimizer, gmaker, tensorshape, epoch,
         data_time.update(time.time() - end)
 
         # compute output
-        output, target, preds, reps = model(im_q=output1, im_k=output2)
+        output, target, preds = model(im_q=output1, im_k=output2)
         loss = criterion(output, target)
         if args.semi_super:
             if i == 0:
@@ -217,21 +217,21 @@ def train(train_loader, model, criterion, optimizer, gmaker, tensorshape, epoch,
             sloss = torch.sum(lossmask * nn.functional.mse_loss(preds, deltaG, reduction='none'))/lossmask.sum()
             super_loss += sloss.item()
             loss += sloss
+            slosses.update(sloss.item(), lossmask.sum())
         total_loss += loss.item()
 
         # acc1/acc5 are (K+1)-way contrast classifier accuracy
         # measure accuracy and record loss
         # acc1, acc5 = accuracy(output, target, topk=(1, 5))
         losses.update(loss.item(), output1.size(0))
-        if args.semi_super:
-            slosses.update(sloss.item(), lossmask.sum())
         # top1.update(acc1[0], images[0].size(0))
         # top5.update(acc5[0], images[0].size(0))
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
+        if args.semi_super:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
         optimizer.step()
 
         # measure elapsed time
