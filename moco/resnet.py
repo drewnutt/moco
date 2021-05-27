@@ -125,22 +125,18 @@ class ResNet(nn.Module):
         self.bn1 = nn.BatchNorm3d(self.in_planes)
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool3d(kernel_size=3, stride=2, padding=1)
-        self.layer1 = self._make_layer(block, block_inplanes[0], layers[0],
-                                       shortcut_type)
+        self.layer1 = self._make_layer(block, block_inplanes[0], layers[0])
         self.layer2 = self._make_layer(block,
                                        block_inplanes[1],
                                        layers[1],
-                                       shortcut_type,
                                        stride=2)
         self.layer3 = self._make_layer(block,
                                        block_inplanes[2],
                                        layers[2],
-                                       shortcut_type
                                        stride=2)
         self.layer4 = self._make_layer(block,
                                        block_inplanes[3],
                                        layers[3],
-                                       shortcut_type,
                                        stride=2)
 
         self.avgpool = nn.AdaptiveAvgPool3d((1, 1, 1))
@@ -166,7 +162,7 @@ class ResNet(nn.Module):
 
         return out
 
-    def _make_layer(self, block, planes, blocks, shortcut_type, stride=1):
+    def _make_layer(self, block, planes, blocks, stride=1):
         downsample = None
         if stride != 1 or self.in_planes != planes * block.expansion:
             downsample = nn.Sequential(
