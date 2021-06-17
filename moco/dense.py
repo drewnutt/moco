@@ -9,7 +9,7 @@ class Dense(nn.Module):
         self.modules = []
         in_feats = input_size[0]
         out_feats = 32
-        self.data_enc_init_pool = nn.MaxPool3d(2, 2)
+        self.data_enc_init_pool = nn.MaxPool3d(2, stride=2)
         self.data_enc_init_conv = nn.Conv3d(in_feats, out_feats, 3, padding=1)
 
         for idx in range(num_dense_blocks - 1):
@@ -23,14 +23,19 @@ class Dense(nn.Module):
             self.add_module(f"data_enc_level{idx}_bottleneck", bottleneck)
             self.modules.append(bottleneck)
 
-            max_pool = nn.MaxPool3d(2, 2)
+            max_pool = nn.MaxPool3d(2, stride=2)
             self.add_module(f"data_enc_level{idx+1}_pool", max_pool)
             self.modules.append(max_pool)
 
         in_feats = out_feats
         dense_block = DenseBlock(in_feats, num_dense_blocks-1, num_dense_convs, num_dense_filters)
+        out_feats = num_dense_convs * num_dense_filters + in_feats
         self.add_module(f"dense_block_{num_dense_blocks-1}", dense_block)
         self.modules.append(dense_block)
+
+        self.pose_output = nn.Linear(out_feats,2)
+
+        self.affinity_output = nn.Linear(out_feats,1)
 
     def forward(self,x):
         x = self.data_enc_init_pool(x) 
@@ -43,7 +48,10 @@ class Dense(nn.Module):
         # Computing the global pooling, kernel is the size of the input
         B, C, D, H, W, = x.size()
         x = F.max_pool3d(x, (D, H, W)).view(B, C)
-        return x
+
+        pose = self.pose_output(x)
+        affinity = self.affinity_output(x)
+        return F.softmax(pose,dim=1),affinity
         
     
 
