@@ -39,7 +39,7 @@ class Dense(nn.Module):
 
     def forward(self,x):
         x = self.data_enc_init_pool(x) 
-        x = self.data_enc_init_conv(x)
+        x = F.relu(self.data_enc_init_conv(x))
         for module in self.modules:
             x = module(x)
             if isinstance(module, nn.Conv3d):
