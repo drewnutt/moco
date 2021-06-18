@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class Dense(nn.Module):
-    def __init__(self, input_size, num_dense_blocks=3, num_dense_filters=16, num_dense_convs=4):
+    def __init__(self, input_size, num_dense_blocks=3, num_dense_filters=16, num_dense_convs=4,two_outputs=False):
         super().__init__()
     
         self.modules = []
@@ -33,7 +33,10 @@ class Dense(nn.Module):
         self.add_module(f"dense_block_{num_dense_blocks-1}", dense_block)
         self.modules.append(dense_block)
 
-        self.pose_output = nn.Linear(out_feats,2)
+        if two_outputs:
+            self.pose_output = nn.Linear(out_feats,2)
+        else:
+            self.pose_output = None
 
         self.affinity_output = nn.Linear(out_feats,1)
 
@@ -49,9 +52,12 @@ class Dense(nn.Module):
         B, C, D, H, W, = x.size()
         x = F.max_pool3d(x, (D, H, W)).view(B, C)
 
-        pose = self.pose_output(x)
+        pose=None
+        if self.pose_output:
+            pose = self.pose_output(x)
+            pose = F.softmax(pose,dim=1)
         affinity = self.affinity_output(x)
-        return F.softmax(pose,dim=1),affinity
+        return affinity, pose
         
     
 
